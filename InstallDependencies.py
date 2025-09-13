@@ -7,12 +7,13 @@ def install(package):
 
 # List of required packages
 required_packages = [
-    "assemblyai"
+    "assemblyai",
     "assemblyai[extras]",
     "pytesseract",
-    "Pillow",
+    "pillow",
     "redis",
-    "pyperclip"
+    "pyperclip",
+    "pyaudio"
 ]
 
 # Try importing, install if missing

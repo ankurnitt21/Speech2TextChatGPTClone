@@ -2,22 +2,21 @@ import os
 import time
 import redis
 import threading
-import pytesseract
+import base64
+import io
 import re
 from PIL import ImageGrab, Image
 import assemblyai as aai
 import pyperclip
+
 count = 0
 combined_text = ""
 my_prompt = """System Prompt (concise):
 In a C# interview, give concise answers. For definitions or differences, use one line 
 plus a real-life example. Share code only if asked, and avoid Dictionary examples unless 
 specifically requested. Coding explanations should be clear but brief. If only theory is 
-needed, don’t include code. Keep responses simple, precise, and practical."""
+needed, don't include code. Keep responses simple, precise, and practical."""
 no_of_question_sent = 0
-# --- OCR Config ---
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-os.environ['TESSDATA_PREFIX'] = r'C:\Program Files\Tesseract-OCR\tessdata'
 
 # --- Redis Config ---
 r = redis.Redis(
@@ -29,7 +28,7 @@ r = redis.Redis(
 )
 
 channel = "realtime:channel"
-r.publish(channel,my_prompt)
+r.publish(channel, my_prompt)
 
 # --- AssemblyAI Config ---
 aai.settings.api_key = "e8349e0c311e419ab4a0993dcade5866"
@@ -41,6 +40,7 @@ sent_length = 0
 last_update_time = time.time()
 screenshots_buffer = []
 screenshot_lock = threading.Lock()
+
 
 def redis_subscriber():
     try:
@@ -73,28 +73,18 @@ def redis_subscriber():
     except Exception as e:
         print(f"❌ Redis subscriber error: {e}")
 
-# ----------------- Text Processing Functions -----------------
-def clean_ocr_text(text):
-    """Clean and preprocess OCR output"""
-    text = text.encode('ascii', 'ignore').decode()
-    text = re.sub(r'[^\w\s\-\.\,\'\"]', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    replacements = {'|': 'I', '‘': "'", '’': "'", '“': '"', '”': '"'}
-    for wrong, correct in replacements.items():
-        text = text.replace(wrong, correct)
-    return text
 
-
-def perform_ocr(image):
-    """Perform OCR on PIL image with preprocessing"""
+# ----------------- Screenshot Processing Functions -----------------
+def convert_screenshot_to_base64(screenshot):
+    """Convert PIL Image to base64 string"""
     try:
-        img = image.convert('L').point(lambda x: 255 if x > 140 else 0)
-        img = img.resize((img.width * 2, img.height * 2), resample=Image.Resampling.BILINEAR)
-        text = pytesseract.image_to_string(img, config='--psm 6 --oem 3 -c preserve_interword_spaces=1')
-        return clean_ocr_text(text)
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format='PNG')
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        return img_base64
     except Exception as e:
-        print(f"❌ OCR Error: {e}")
-        return ""
+        print(f"❌ Error converting screenshot: {e}")
+        return None
 
 
 # ----------------- Screenshot Handling -----------------
@@ -105,22 +95,33 @@ def capture_and_buffer_screenshot():
         with screenshot_lock:
             screenshot = ImageGrab.grab()
             count += 1
-            text = perform_ocr(screenshot)
-            if text:
-                combined_text += f"\n{text}\n\n"
-                print(text + "\n\n")
+
+            # Convert screenshot to base64
+            img_base64 = convert_screenshot_to_base64(screenshot)
+            if img_base64:
+                # Create unique image ID
+                image_id = f"screenshot_{int(time.time())}_{count}"
+
+                # Store the actual image data separately in Redis
+                # Set expiration to 1 hour (3600 seconds)
+                r.set(f"image:{image_id}", img_base64, ex=3600)
+
+                # Send only a reference in the main message
+                message_text = f"📸 Screenshot captured: {image_id}"
+                combined_text += f"\n{message_text}\n\n"
+                print(f"📸 Screenshot stored with ID: {image_id} (size: {len(img_base64)} chars)")
 
             if count >= 2:
-                print("Sending1")
+                print("Sending message with screenshot references...")
                 if combined_text:
-                    print("Sending2\n")
-                    print(combined_text)
+                    print("Sending message to Redis...")
                     r.publish(channel, combined_text)
                 count = 0
                 combined_text = ""
 
     except Exception as e:
         print(f"❌ Error capturing screenshot: {e}")
+
 
 # ----------------- Transcription Handling -----------------
 def paste_and_send():
@@ -129,7 +130,7 @@ def paste_and_send():
 
     if new_text:
         if no_of_question_sent == 5:
-            r.publish(channel,my_prompt)
+            r.publish(channel, my_prompt)
             no_of_question_sent = 0
         r.publish(channel, new_text.encode("utf-8"))
         print(f"🗣️ Sent transcription: {new_text.strip()}")
@@ -186,6 +187,7 @@ def monitor_transcription():
         if (new_text and current_time - last_update_time > SILENCE_THRESHOLD) or len(new_words) >= 7:
             paste_and_send()
         time.sleep(0.1)
+
 
 # ----------------- Main -----------------
 def main():
