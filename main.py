@@ -32,7 +32,7 @@ r.publish(channel, my_prompt)
 
 # --- AssemblyAI Config ---
 aai.settings.api_key = "e8349e0c311e419ab4a0993dcade5866"
-SILENCE_THRESHOLD = 0.7  # 700ms
+SILENCE_THRESHOLD = 0.4  # 700ms
 
 # --- State ---
 transcription = ""
@@ -41,8 +41,17 @@ last_update_time = time.time()
 screenshots_buffer = []
 screenshot_lock = threading.Lock()
 
+# --- Speech Control State ---
+speech_enabled = False
+speech_lock = threading.Lock()
+transcriber = None
+microphone_stream = None
+transcription_thread = None
+monitor_thread = None
+
 
 def redis_subscriber():
+    global speech_enabled
     try:
         pubsub = r.pubsub()
         pubsub.subscribe("realtime:alerts")
@@ -54,12 +63,19 @@ def redis_subscriber():
                 if isinstance(data, bytes):
                     data = data.decode().strip().lower()
 
-                print(f"🔴 Raw Redis message: {data}")
+                # print(f"🔴 Raw Redis message: {data}")
 
-                if data == "screenshot":
+                # Handle speech control commands
+                if data == "start speech":
+                    print("🎤 Starting speech recognition from Redis command")
+                    start_speech_service()
+                elif data == "stop speech":
+                    print("🛑 Stopping speech recognition from Redis command")
+                    stop_speech_service()
+                elif data == "screenshot":
                     print("🖼️ Triggering capture from Redis message")
                     capture_and_buffer_screenshot()
-                if data.strip().lower() == "clipboard":
+                elif data.strip().lower() == "clipboard":
                     print("📥 Clipboard fetch requested.")
                     try:
                         clipboard_text = pyperclip.paste()
@@ -72,6 +88,84 @@ def redis_subscriber():
                         print(f"❌ Clipboard read error: {e}")
     except Exception as e:
         print(f"❌ Redis subscriber error: {e}")
+
+
+# ----------------- Speech Control Functions -----------------
+def start_speech_service():
+    """Start the speech recognition service"""
+    global speech_enabled, transcriber, microphone_stream, transcription_thread, monitor_thread
+
+    with speech_lock:
+        if speech_enabled:
+            print("⚠️ Speech service is already running")
+            return
+
+        try:
+            speech_enabled = True
+
+            # ⭐ ADD THIS LINE - Send status to speech status channel
+            r.publish("speech:status", "SPEECH_STARTED")
+
+            # Start transcription in a new thread
+            transcription_thread = threading.Thread(target=start_transcription, daemon=True)
+            transcription_thread.start()
+
+            # Start monitoring in a new thread
+            monitor_thread = threading.Thread(target=monitor_transcription, daemon=True)
+            monitor_thread.start()
+
+            print("✅ Speech recognition service started")
+
+        except Exception as e:
+            speech_enabled = False
+            print(f"❌ Failed to start speech service: {e}")
+            r.publish(channel, f"❌ Failed to start speech service: {e}")
+            # ⭐ ADD THIS LINE - Send failure status
+            r.publish("speech:status", "SPEECH_STOPPED")
+
+
+def stop_speech_service():
+    """Stop the speech recognition service"""
+    global speech_enabled, transcriber, microphone_stream
+
+    with speech_lock:
+        if not speech_enabled:
+            print("⚠️ Speech service is not running")
+            return
+
+        try:
+            speech_enabled = False
+
+            # ⭐ ADD THIS LINE - Send status to speech status channel
+            r.publish("speech:status", "SPEECH_STOPPED")
+
+            # Close transcriber connection
+            if transcriber:
+                try:
+                    transcriber.close()
+                    print("🔒 Transcriber connection closed")
+                except Exception as e:
+                    print(f"⚠️ Error closing transcriber: {e}")
+
+            # Close microphone stream
+            if microphone_stream:
+                try:
+                    microphone_stream.close()
+                    print("🎙️ Microphone stream closed")
+                except Exception as e:
+                    print(f"⚠️ Error closing microphone: {e}")
+
+            # Reset transcriber and stream
+            transcriber = None
+            microphone_stream = None
+
+            print("✅ Speech recognition service stopped")
+
+        except Exception as e:
+            print(f"❌ Error stopping speech service: {e}")
+            r.publish(channel, f"❌ Error stopping speech service: {e}")
+            # ⭐ ADD THIS LINE - Ensure stopped status is sent even on error
+            r.publish("speech:status", "SPEECH_STOPPED")
 
 
 # ----------------- Screenshot Processing Functions -----------------
@@ -103,8 +197,8 @@ def capture_and_buffer_screenshot():
                 image_id = f"screenshot_{int(time.time())}_{count}"
 
                 # Store the actual image data separately in Redis
-                # Set expiration to 1 hour (3600 seconds)
-                r.set(f"image:{image_id}", img_base64, ex=3600)
+                # Set expiration to 1 hour (60 seconds)
+                r.set(f"image:{image_id}", img_base64, ex=60)
 
                 # Send only a reference in the main message
                 message_text = f"📸 Screenshot captured: {image_id}"
@@ -126,6 +220,11 @@ def capture_and_buffer_screenshot():
 # ----------------- Transcription Handling -----------------
 def paste_and_send():
     global sent_length, transcription, last_update_time, no_of_question_sent, my_prompt
+
+    # Only send if speech is enabled
+    if not speech_enabled:
+        return
+
     new_text = transcription[sent_length:]
 
     if new_text:
@@ -141,6 +240,10 @@ def paste_and_send():
 
 def on_data(transcript: aai.RealtimeTranscript):
     global transcription, last_update_time
+
+    # Only process if speech is enabled
+    if not speech_enabled:
+        return
 
     if not transcript.text:
         return
@@ -164,38 +267,61 @@ def on_close():
 
 # ----------------- Start Transcription -----------------
 def start_transcription():
-    transcriber = aai.RealtimeTranscriber(
-        sample_rate=44100,
-        on_data=on_data,
-        on_error=on_error,
-        on_open=on_open,
-        on_close=on_close,
-        end_utterance_silence_threshold=950
-    )
-    transcriber.connect()
-    microphone_stream = aai.extras.MicrophoneStream(sample_rate=44100, device_index=1)
-    transcriber.stream(microphone_stream)
+    global transcriber, microphone_stream
+
+    try:
+        transcriber = aai.RealtimeTranscriber(
+            sample_rate=44100,
+            on_data=on_data,
+            on_error=on_error,
+            on_open=on_open,
+            on_close=on_close,
+            end_utterance_silence_threshold=950
+        )
+        transcriber.connect()
+        microphone_stream = aai.extras.MicrophoneStream(sample_rate=44100, device_index=1)
+        transcriber.stream(microphone_stream)
+    except Exception as e:
+        print(f"❌ Error in transcription: {e}")
+        # Auto-stop if there's an error
+        stop_speech_service()
 
 
-# ----------------- Monitor Clipboard (Text Trigger) -----------------
+# ----------------- Monitor Transcription -----------------
 def monitor_transcription():
     global transcription, last_update_time, sent_length
-    while True:
-        current_time = time.time()
-        new_text = transcription[sent_length:]
-        new_words = new_text.split()
-        if (new_text and current_time - last_update_time > SILENCE_THRESHOLD) or len(new_words) >= 7:
-            paste_and_send()
-        time.sleep(0.1)
+
+    while speech_enabled:
+        try:
+            current_time = time.time()
+            new_text = transcription[sent_length:]
+            new_words = new_text.split()
+            if (new_text and current_time - last_update_time > SILENCE_THRESHOLD) or len(new_words) >= 7:
+                paste_and_send()
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"❌ Error in monitor_transcription: {e}")
+            break
+
+    print("📴 Transcription monitoring stopped")
 
 
 # ----------------- Main -----------------
 def main():
-    threading.Thread(target=start_transcription, daemon=True).start()
-    threading.Thread(target=monitor_transcription, daemon=True).start()
-    threading.Thread(target=redis_subscriber, daemon=True).start()  # NEW THREAD
-    while True:
-        time.sleep(1)
+    print("🚀 Speech2Text Controllable Service Starting...")
+    print("📡 Listening for Redis commands: 'start speech', 'stop speech', 'screenshot', 'clipboard'")
+
+    # Start Redis subscriber
+    threading.Thread(target=redis_subscriber, daemon=True).start()
+
+    # Keep the main thread alive
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down service...")
+        stop_speech_service()
+        print("👋 Service stopped.")
 
 
 if __name__ == "__main__":

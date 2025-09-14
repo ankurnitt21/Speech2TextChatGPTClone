@@ -5,15 +5,13 @@ import sys
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-# List of required packages
+# List of required packages for main.py
 required_packages = [
     "assemblyai",
-    "assemblyai[extras]",
-    "pytesseract",
-    "pillow",
-    "redis",
-    "pyperclip",
-    "pyaudio"
+    "assemblyai[extras]",  # Includes microphone stream support
+    "pillow",              # PIL for image processing
+    "redis",               # Redis client
+    "pyperclip",           # Clipboard operations
 ]
 
 # Try importing, install if missing
@@ -26,4 +24,4 @@ for package in required_packages:
         install(package)
         __import__(package.split("[")[0])  # import after installation
 
-print("🚀 All dependencies are ready to use!")
+print("🚀 All dependencies for main.py are ready to use!")
