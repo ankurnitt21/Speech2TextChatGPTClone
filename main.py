@@ -187,7 +187,10 @@ def capture_and_buffer_screenshot():
     global count
     try:
         with screenshot_lock:
-            screenshot = ImageGrab.grab()
+            screenshot1 = ImageGrab.grab()
+            width, height = screenshot1.size
+            screenshot = screenshot1.crop((0, 84, width, height - 80))
+
             count += 1
 
             # Convert screenshot to base64
