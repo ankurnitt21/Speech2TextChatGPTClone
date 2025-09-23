@@ -1,0 +1,5 @@
+redis
+pillow
+assemblyai
+assemblyai[extras]
+pyperclip

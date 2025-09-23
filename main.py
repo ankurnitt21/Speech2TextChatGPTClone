@@ -5,33 +5,88 @@ import threading
 import base64
 import io
 import re
+import configparser
+import logging
+import sys
+from datetime import datetime
 from PIL import ImageGrab, Image
 import assemblyai as aai
 import pyperclip
 
+# Setup logging
+def setup_logging():
+    """Setup logging for both console and file output"""
+    # Create logs directory if it doesn't exist
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+    
+    # Setup logging format with more detailed timestamp
+    log_format = '%(asctime)s | %(levelname)-8s | %(message)s'
+    
+    # Create file handler with explicit encoding and flushing
+    log_filename = f'logs/speech2text_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.log'
+    file_handler = logging.FileHandler(log_filename, encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(log_format))
+    
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(log_format))
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+    
+    # Log filename is handled automatically
+    
+    return root_logger
+
+# Initialize logging
+logger = setup_logging()
+logger.info("🚀 Speech2Text Service Starting...")
+
+# Load configuration from config.ini
+config = configparser.ConfigParser()
+config.read('config.ini')
+logger.info("📋 Configuration loaded from config.ini")
+
+# Get Redis configuration
+redis_host = config.get('REDIS', 'host')
+redis_port = config.getint('REDIS', 'port')
+redis_username = config.get('REDIS', 'username')
+redis_password = config.get('REDIS', 'password')
+logger.info(f"🔧 Redis configured: {redis_host}:{redis_port}")
+
+# Get AssemblyAI configuration
+assemblyai_api_key = config.get('ASSEMBLYAI', 'api_key')
+logger.info(f"🎤 AssemblyAI configured: {assemblyai_api_key[:10]}...")
+
+# Get system prompt configuration
+my_prompt = config.get('PROMPT', 'system_prompt')
+logger.info("📝 System prompt loaded from configuration")
+
 count = 0
 combined_text = ""
-my_prompt = """System Prompt (concise):
-In a C# interview, give concise answers. For definitions or differences, use one line 
-plus a real-life example. Share code only if asked, and avoid Dictionary examples unless 
-specifically requested. Coding explanations should be clear but brief. If only theory is 
-needed, don't include code. Keep responses simple, precise, and practical."""
 no_of_question_sent = 0
 
 # --- Redis Config ---
 r = redis.Redis(
-    host='redis-10748.c330.asia-south1-1.gce.redns.redis-cloud.com',
-    port=10748,
+    host=redis_host,
+    port=redis_port,
     decode_responses=True,
-    username="default",
-    password="0LOOmEVVY2jnAUieXYIV5kv7rZhx7ItL",
+    username=redis_username,
+    password=redis_password,
 )
 
 channel = "realtime:channel"
 r.publish(channel, my_prompt)
+logger.info(f"📤 SYSTEM PROMPT: Initial prompt sent to Redis channel '{channel}'")
 
 # --- AssemblyAI Config ---
-aai.settings.api_key = "e8349e0c311e419ab4a0993dcade5866"
+aai.settings.api_key = assemblyai_api_key
 SILENCE_THRESHOLD = 0.4  # 700ms
 
 # --- State ---
@@ -56,38 +111,39 @@ def redis_subscriber():
         pubsub = r.pubsub()
         pubsub.subscribe("realtime:alerts")
 
-        print("📡 Listening to 'realtime:alerts'...")
+        logger.info("📡 Listening to 'realtime:alerts'...")
         for message in pubsub.listen():
             if message and message['type'] == 'message':
                 data = message['data']
                 if isinstance(data, bytes):
                     data = data.decode().strip().lower()
 
-                # print(f"🔴 Raw Redis message: {data}")
+                logger.debug(f"🔴 Raw Redis message: {data}")
 
                 # Handle speech control commands
                 if data == "start speech":
-                    print("🎤 Starting speech recognition from Redis command")
+                    logger.info("🎤 Starting speech recognition from Redis command")
                     start_speech_service()
                 elif data == "stop speech":
-                    print("🛑 Stopping speech recognition from Redis command")
+                    logger.info("🛑 Stopping speech recognition from Redis command")
                     stop_speech_service()
                 elif data == "screenshot":
-                    print("🖼️ Triggering capture from Redis message")
+                    logger.info("🖼️ Triggering capture from Redis message")
                     capture_and_buffer_screenshot()
                 elif data.strip().lower() == "clipboard":
-                    print("📥 Clipboard fetch requested.")
+                    logger.info("📥 Clipboard fetch requested.")
                     try:
                         clipboard_text = pyperclip.paste()
                         if clipboard_text.strip():
                             r.publish(channel, clipboard_text)
-                            print(f"📤 Clipboard sent: {clipboard_text[:50]}{'...' if len(clipboard_text) > 50 else ''}")
+                            logger.info(f"📋 CLIPBOARD: {clipboard_text.strip()}")
+                            logger.info(f"📤 Clipboard sent: {clipboard_text[:50]}{'...' if len(clipboard_text) > 50 else ''}")
                         else:
-                            print("📤 Clipboard is empty.")
+                            logger.info("📤 Clipboard is empty.")
                     except Exception as e:
-                        print(f"❌ Clipboard read error: {e}")
+                        logger.error(f"❌ Clipboard read error: {e}")
     except Exception as e:
-        print(f"❌ Redis subscriber error: {e}")
+        logger.error(f"❌ Redis subscriber error: {e}")
 
 
 # ----------------- Speech Control Functions -----------------
@@ -114,6 +170,7 @@ def start_speech_service():
             monitor_thread = threading.Thread(target=monitor_transcription, daemon=True)
             monitor_thread.start()
 
+            logger.info("🎤 SPEECH SERVICE: Started successfully")
             print("✅ Speech recognition service started")
 
         except Exception as e:
@@ -159,6 +216,7 @@ def stop_speech_service():
             transcriber = None
             microphone_stream = None
 
+            logger.info("🛑 SPEECH SERVICE: Stopped successfully")
             print("✅ Speech recognition service stopped")
 
         except Exception as e:
@@ -206,6 +264,9 @@ def capture_and_buffer_screenshot():
                 # Send only a reference in the main message
                 message_text = f"📸 Screenshot captured: {image_id}"
                 combined_text += f"\n{message_text}\n\n"
+                
+                # Log screenshot details
+                logger.info(f"📸 SCREENSHOT: {image_id} - Size: {len(img_base64)} chars - Resolution: {screenshot.size[0]}x{screenshot.size[1]}")
                 print(f"📸 Screenshot stored with ID: {image_id} (size: {len(img_base64)} chars)")
 
             if count >= 2:
@@ -213,6 +274,7 @@ def capture_and_buffer_screenshot():
                 if combined_text:
                     print("Sending message to Redis...")
                     r.publish(channel, combined_text)
+                    logger.info(f"📤 SCREENSHOTS SENT: {count} screenshots sent to Redis")
                 count = 0
                 combined_text = ""
 
@@ -233,8 +295,10 @@ def paste_and_send():
     if new_text:
         if no_of_question_sent == 5:
             r.publish(channel, my_prompt)
+            logger.info(f"🔄 SYSTEM PROMPT RESENT: After {no_of_question_sent} questions")
             no_of_question_sent = 0
         r.publish(channel, new_text.encode("utf-8"))
+        logger.info(f"🗣️ SPEECH: {new_text.strip()}")
         print(f"🗣️ Sent transcription: {new_text.strip()}")
         sent_length = len(transcription)
         last_update_time = time.time()
@@ -311,20 +375,22 @@ def monitor_transcription():
 
 # ----------------- Main -----------------
 def main():
-    print("🚀 Speech2Text Controllable Service Starting...")
-    print("📡 Listening for Redis commands: 'start speech', 'stop speech', 'screenshot', 'clipboard'")
+    logger.info("🚀 Speech2Text Controllable Service Starting...")
+    logger.info("📡 Listening for Redis commands: 'start speech', 'stop speech', 'screenshot', 'clipboard'")
 
     # Start Redis subscriber
     threading.Thread(target=redis_subscriber, daemon=True).start()
+    logger.info("🔄 Redis subscriber thread started")
 
     # Keep the main thread alive
     try:
+        logger.info("✅ Service is now running and ready to receive commands")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n🛑 Shutting down service...")
+        logger.info("\n🛑 Shutting down service...")
         stop_speech_service()
-        print("👋 Service stopped.")
+        logger.info("👋 Service stopped.")
 
 
 if __name__ == "__main__":
