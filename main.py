@@ -135,9 +135,17 @@ def redis_subscriber():
                     try:
                         clipboard_text = pyperclip.paste()
                         if clipboard_text.strip():
-                            r.publish(channel, clipboard_text)
-                            logger.info(f"📋 CLIPBOARD: {clipboard_text.strip()}")
-                            logger.info(f"📤 Clipboard sent: {clipboard_text[:50]}{'...' if len(clipboard_text) > 50 else ''}")
+                            # Check if clipboard contains URL (http or https)
+                            if "http://" in clipboard_text or "https://" in clipboard_text:
+                                # Send to url_channel for URL processing
+                                r.publish("url_channel", clipboard_text)
+                                logger.info(f"🔗 URL DETECTED: Sent to url_channel")
+                                logger.info(f"📤 URL sent: {clipboard_text[:50]}{'...' if len(clipboard_text) > 50 else ''}")
+                            else:
+                                # Send to regular channel for non-URL content
+                                r.publish(channel, clipboard_text)
+                                logger.info(f"📋 CLIPBOARD: {clipboard_text.strip()}")
+                                logger.info(f"📤 Clipboard sent: {clipboard_text[:50]}{'...' if len(clipboard_text) > 50 else ''}")
                         else:
                             logger.info("📤 Clipboard is empty.")
                     except Exception as e:
