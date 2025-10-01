@@ -3,3 +3,4 @@ pillow
 assemblyai
 assemblyai[extras]
 pyperclip
+keyboard

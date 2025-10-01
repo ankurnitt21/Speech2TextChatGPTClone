@@ -1,0 +1,22 @@
+2025-10-01 14:57:08,887 | INFO     | 🚀 Speech2Text Service Starting...
+2025-10-01 14:57:08,888 | INFO     | 📋 Configuration loaded from config.ini
+2025-10-01 14:57:08,888 | INFO     | 🔧 Redis configured: redis-10748.c330.asia-south1-1.gce.redns.redis-cloud.com:10748
+2025-10-01 14:57:08,888 | INFO     | 🎤 AssemblyAI configured: e8349e0c31...
+2025-10-01 14:57:08,889 | INFO     | 🚀 Speech2Text Service Starting...
+2025-10-01 14:57:08,889 | INFO     | 📡 Listening for Redis commands: 'start speech', 'stop speech'
+2025-10-01 14:57:08,891 | INFO     | 🔄 Redis subscriber thread started
+2025-10-01 14:57:08,891 | INFO     | ✅ Service is now running and ready to receive commands
+2025-10-01 14:57:08,893 | INFO     | 🔄 Service will stay running - use 'start speech' and 'stop speech' commands
+2025-10-01 14:57:09,053 | INFO     | 📡 Listening to 'realtime:alerts' for speech commands...
+2025-10-01 14:57:10,887 | INFO     | 🎤 Starting speech recognition from Redis command
+2025-10-01 14:57:11,107 | INFO     | 🎤 SPEECH SERVICE: Started successfully
+2025-10-01 14:57:13,903 | INFO     | 🛑 Stopping speech recognition from Redis command
+2025-10-01 14:57:19,746 | INFO     | 🛑 SPEECH SERVICE: Stopped successfully
+2025-10-01 14:57:24,117 | INFO     | 🎤 Starting speech recognition from Redis command
+2025-10-01 14:57:24,157 | INFO     | 🎤 SPEECH SERVICE: Started successfully
+2025-10-01 14:57:25,624 | INFO     | 🛑 Stopping speech recognition from Redis command
+2025-10-01 14:57:30,174 | INFO     | 🛑 SPEECH SERVICE: Stopped successfully
+2025-10-01 14:58:23,998 | INFO     | 🎤 Starting speech recognition from Redis command
+2025-10-01 14:58:24,035 | INFO     | 🎤 SPEECH SERVICE: Started successfully
+2025-10-01 14:58:26,460 | INFO     | 🛑 Stopping speech recognition from Redis command
+2025-10-01 14:58:31,160 | INFO     | 🛑 SPEECH SERVICE: Stopped successfully
